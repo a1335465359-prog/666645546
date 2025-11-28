@@ -1,9 +1,16 @@
 export const config = {
-  runtime: 'edge', // 使用 Edge Runtime 获得更快的响应速度
+  runtime: 'edge',
 };
 
+const API_KEYS = [
+  "AIzaSyA3KtYJgk1XqLAm-SrJi4JoC0589p2O8cE",
+  "AIzaSyDMnKE7ZfhdV_iC3MIe4Yj6GHqrKDcPXe8",
+  "AIzaSyB3GvITGbZ4s3mruUi4_-vvGkaezO-98PI",
+  "AIzaSyBrLFml9nuPHgRf2ZYfJkT2uYLMNjrQkzo",
+  "AIzaSyDKhesr7XngUpHCiis7huXms8MsIdxMooQ"
+];
+
 export default async function handler(req) {
-  // CORS 处理
   if (req.method === 'OPTIONS') {
     return new Response(null, {
       status: 200,
@@ -16,91 +23,44 @@ export default async function handler(req) {
   }
 
   if (req.method !== 'POST') {
-    return new Response(JSON.stringify({ error: 'Method Not Allowed' }), {
-      status: 405,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    return new Response(JSON.stringify({ error: 'Method Not Allowed' }), { status: 405 });
   }
 
   try {
-    const { model, contents, systemInstruction, config } = await req.json();
-    const apiKey = process.env.GEMINI_API_KEY;
-
-    if (!apiKey) {
-      return new Response(JSON.stringify({ error: 'Server configuration error: API Key missing' }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-
-    // 映射前端 Model 到 Google REST API 接受的 Model
-    // 兼容 gemini-2.5 别名到实际可用模型
-    let targetModel = model || 'gemini-1.5-flash';
-    if (targetModel.includes('2.5')) {
-       // 如果 Google 尚未开放 2.5 API 别名，回退到 1.5 或 2.0-flash-exp
-       // 这里假设用户想要高性能模型，暂时映射到 1.5-flash 以确保稳定，或者 gemini-2.0-flash-exp
-       targetModel = 'gemini-1.5-flash'; 
-    }
-
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${apiKey}`;
-
-    // 构建 REST API Payload
-    const payload = {
-      contents: contents,
-      generationConfig: config || {},
-    };
-
-    if (systemInstruction) {
-      payload.systemInstruction = {
-        parts: [{ text: systemInstruction }]
-      };
-    }
+    const body = await req.json();
     
-    // 如果是 JSON 模式，需要传递 responseMimeType
-    if (config?.responseMimeType) {
-        payload.generationConfig.responseMimeType = config.responseMimeType;
-    }
-    if (config?.responseSchema) {
-        payload.generationConfig.responseSchema = config.responseSchema;
-    }
+    // Pick a random key for basic load balancing
+    const apiKey = API_KEYS[Math.floor(Math.random() * API_KEYS.length)];
+    
+    // Default to 1.5-flash if not specified, but TRUST the frontend if it sends something else (e.g. 1.5-pro)
+    const model = body.model || 'gemini-1.5-flash';
 
-    const response = await fetch(apiUrl, {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+    const upstreamResponse = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
     });
 
-    const data = await response.json();
+    const data = await upstreamResponse.json();
 
-    if (!response.ok) {
-      console.error('Gemini API Error:', data);
-      return new Response(JSON.stringify({ error: data.error?.message || 'Upstream API Error' }), {
-        status: response.status,
-        headers: { 
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*'
-        },
+    if (!upstreamResponse.ok) {
+      return new Response(JSON.stringify(data), { 
+          status: upstreamResponse.status,
+          headers: { 'Content-Type': 'application/json' }
       });
     }
 
     return new Response(JSON.stringify(data), {
       status: 200,
-      headers: { 
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*' 
-      },
+      headers: { 'Content-Type': 'application/json' },
     });
 
   } catch (error) {
-    console.error('Server Error:', error);
-    return new Response(JSON.stringify({ error: 'Internal Server Error' }), {
+    return new Response(JSON.stringify({ error: error.message }), {
       status: 500,
-      headers: { 
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*' 
-      },
+      headers: { 'Content-Type': 'application/json' },
     });
   }
 }

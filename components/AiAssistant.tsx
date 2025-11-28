@@ -32,7 +32,6 @@ const AiAssistant: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Load history from localStorage
   useEffect(() => {
     const savedSessions = localStorage.getItem('temu_chat_sessions');
     if (savedSessions) {
@@ -45,7 +44,6 @@ const AiAssistant: React.FC = () => {
     }
   }, []);
 
-  // Save history to localStorage whenever sessions change
   useEffect(() => {
     if (sessions.length > 0) {
       localStorage.setItem('temu_chat_sessions', JSON.stringify(sessions));
@@ -116,8 +114,6 @@ const AiAssistant: React.FC = () => {
 
   const saveCurrentSession = (updatedMessages: Message[]) => {
     const timestamp = Date.now();
-    
-    // Determine Title
     let title = '新对话';
     const firstUserMsg = updatedMessages.find(m => m.role === 'user');
     if (firstUserMsg) {
@@ -125,14 +121,12 @@ const AiAssistant: React.FC = () => {
     }
 
     if (currentSessionId) {
-      // Update existing session
       setSessions(prev => prev.map(s => 
         s.id === currentSessionId 
           ? { ...s, messages: updatedMessages, timestamp, title } 
           : s
       ));
     } else {
-      // Create new session
       const newId = Date.now().toString();
       const newSession: ChatSession = {
         id: newId,
@@ -156,8 +150,6 @@ const AiAssistant: React.FC = () => {
 
     const newMessages = [...messages, userMessage];
     setMessages(newMessages);
-    
-    // Optimistically save user message
     saveCurrentSession(newMessages);
 
     setInput('');
@@ -166,18 +158,35 @@ const AiAssistant: React.FC = () => {
     setIsLoading(true);
 
     try {
-      const historyForApi = newMessages.map(msg => ({
-        role: msg.role,
-        parts: msg.image 
-          ? [{ text: msg.text || " " }, { inlineData: { mimeType: 'image/jpeg', data: msg.image.split(',')[1] } }]
-          : [{ text: msg.text }]
-      }));
+      // Build history for the service.
+      // We pass the raw parts to the service. The service handles the strict JSON conversion (snake_case).
+      // Here we use camelCase 'inlineData' because we might be using it locally, 
+      // but to be safe, we let the service helper convert it.
+      // Actually, let's just construct simple objects and let service map them.
+      const historyForApi = newMessages.map(msg => {
+         const parts = [];
+         if (msg.image) {
+             // msg.image is "data:image/png;base64,..."
+             const base64Data = msg.image.split(',')[1];
+             // Pass object with explicit keys so service can find them
+             // Using camelCase here to match the service's expected input for "legacy" checks or just standard js objects
+             // The updated geminiService.ts handles `inlineData` OR `inline_data`.
+             parts.push({ inlineData: { mimeType: 'image/jpeg', data: base64Data } });
+         }
+         if (msg.text) {
+             parts.push({ text: msg.text });
+         }
+         return {
+             role: msg.role,
+             parts: parts
+         };
+      });
 
       const responseText = await chatWithBuyerAI(historyForApi, userMessage.text, currentImage || undefined);
       
       const finalMessages = [...newMessages, { role: 'model', text: responseText } as Message];
       setMessages(finalMessages);
-      saveCurrentSession(finalMessages); // Save AI response
+      saveCurrentSession(finalMessages);
 
     } catch (error) {
       console.error(error);

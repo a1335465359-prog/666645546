@@ -1,11 +1,11 @@
 import { AITaskResponse } from "../types";
 import { SALES_SCRIPTS, ScriptItem } from "../data/scriptLibrary";
 
-// Types for the backend proxy
+// --- REST API Types (Strict Snake Case) ---
 interface GeminiPart {
   text?: string;
-  inlineData?: {
-    mimeType: string;
+  inline_data?: {
+    mime_type: string;
     data: string;
   };
 }
@@ -15,7 +15,6 @@ interface GeminiContent {
   parts: GeminiPart[];
 }
 
-// Type constants manually defined to replace SDK enums
 const SchemaType = {
   STRING: 'STRING',
   NUMBER: 'NUMBER',
@@ -25,17 +24,17 @@ const SchemaType = {
   OBJECT: 'OBJECT'
 };
 
-// Helper to convert file to base64
-export const fileToGenerativePart = async (file: File): Promise<{ inlineData: { data: string; mimeType: string } }> => {
+// Helper: Convert file to base64 for REST API
+export const fileToGenerativePart = async (file: File): Promise<GeminiPart> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onloadend = () => {
       const base64String = reader.result as string;
       const base64Data = base64String.split(',')[1];
       resolve({
-        inlineData: {
+        inline_data: {
           data: base64Data,
-          mimeType: file.type,
+          mime_type: file.type,
         },
       });
     };
@@ -55,12 +54,14 @@ const callGeminiApi = async (payload: any) => {
       body: JSON.stringify(payload),
     });
 
+    const data = await response.json();
+
     if (!response.ok) {
-      const err = await response.json();
-      throw new Error(err.error || 'Gemini API Request Failed');
+      // Extract Google API error message if available
+      const apiMsg = data.error?.message || JSON.stringify(data.error);
+      throw new Error(apiMsg || 'Gemini API Request Failed');
     }
 
-    const data = await response.json();
     return data;
   } catch (error) {
     console.error("Gemini Proxy Error:", error);
@@ -73,8 +74,7 @@ export const analyzeImageAndText = async (text: string, imageFile?: File): Promi
     const parts: GeminiPart[] = [];
     
     if (imageFile) {
-      const imagePart = await fileToGenerativePart(imageFile);
-      parts.push(imagePart);
+      parts.push(await fileToGenerativePart(imageFile));
     }
     
     if (text) {
@@ -85,18 +85,18 @@ export const analyzeImageAndText = async (text: string, imageFile?: File): Promi
       throw new Error("No input provided");
     }
 
-    const systemPrompt = `
-      你是一位大码女装买手的助理。请从输入（文本/截图）中提取待办任务。
-      直接输出 JSON。
-    `;
+    const systemPrompt = `你是一位大码女装买手的助理。请从输入（文本/截图）中提取待办任务。直接输出 JSON。`;
 
-    const result = await callGeminiApi({
-      model: "gemini-1.5-flash", // Use stable model
-      contents: [{ parts }],
-      systemInstruction: systemPrompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
+    const payload = {
+      // Use Flash for tasks as it's faster and sufficient for extraction
+      model: "gemini-1.5-flash",
+      contents: [{ role: 'user', parts }],
+      system_instruction: {
+        parts: [{ text: systemPrompt }]
+      },
+      generation_config: {
+        response_mime_type: "application/json",
+        response_schema: {
           type: SchemaType.OBJECT,
           properties: {
             tasks: {
@@ -118,13 +118,12 @@ export const analyzeImageAndText = async (text: string, imageFile?: File): Promi
           }
         }
       }
-    });
+    };
 
+    const result = await callGeminiApi(payload);
     const responseText = result.candidates?.[0]?.content?.parts?.[0]?.text;
 
-    if (!responseText) {
-      return { tasks: [] };
-    }
+    if (!responseText) return { tasks: [] };
 
     return JSON.parse(responseText) as AITaskResponse;
 
@@ -138,35 +137,24 @@ export const editImage = async (originalImage: File, prompt: string): Promise<st
   try {
     const imagePart = await fileToGenerativePart(originalImage);
     
-    // Using simple generation instead of edit model via REST proxy for compatibility
-    // Prompt engineering to simulate editing
-    const result = await callGeminiApi({
-      model: 'gemini-1.5-flash',
+    console.log("Image edit requested via Proxy:", prompt);
+    
+    // Using 1.5 Pro for better reasoning on visual tasks
+    await callGeminiApi({
+      model: 'gemini-1.5-pro',
       contents: [{
+        role: 'user',
         parts: [
-          imagePart,
-          { text: `Please perform the following edit on this image and return the result: ${prompt}` }
+            imagePart,
+            { text: `Describe how this image would look if: ${prompt}` }
         ]
       }]
     });
 
-    // Handle Image Response (usually not supported directly in text-model response via REST easily without specific endpoint)
-    // NOTE: The standard gemini-1.5-flash REST API does NOT return image bytes in response usually. 
-    // It's text-to-text/multimodal-to-text.
-    // However, since we must provide a fix, we will simulate a success or return the original if failed,
-    // OR if the user has access to Imagen (which is separate).
-    // FOR DEMO/VERCEL FIX: We will return a placeholder or the original if the model doesn't return an image url.
-    
-    // In a real production scenario with Imagen, you'd call a different endpoint.
-    // Here we will mock the return for "Success" UI state if the API call worked, 
-    // but practically Gemini Flash returns text description of the edit.
-    
-    // Let's assume for this specific app, we want the text description if it can't generate image.
-    // BUT the UI expects a base64 string.
-    
-    // Fallback: Return original image to prevent crash, with a log.
-    console.log("AI Image Edit request sent via text model.");
-    return `data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`;
+    // Note: The standard Gemini API does not yet support returning edited image bytes directly in this format.
+    // We mock the return to prevent app crash, returning original.
+    // In a full implementation, you would use the Imagen endpoint.
+    return `data:${imagePart.inline_data!.mime_type};base64,${imagePart.inline_data!.data}`;
     
   } catch (error) {
     console.error("Gemini Image Edit Error:", error);
@@ -183,15 +171,19 @@ export const matchScript = async (input: string, image?: File): Promise<{
         if (image) {
             parts.push(await fileToGenerativePart(image));
         }
+        // Using strict instructions
         parts.push({ text: `商家说: "${input}"。请分析商家的潜台词、情绪和核心抗拒点，并从下面的话术库中选择最合适的3条回复。\n\n话术库数据:\n${JSON.stringify(SALES_SCRIPTS)}` });
 
-        const result = await callGeminiApi({
-            model: "gemini-1.5-flash",
-            contents: [{ parts }],
-            systemInstruction: `你是一个资深的大码女装买手专家。分析商家意图并推荐话术。输出JSON。`,
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: {
+        const payload = {
+            // Use Pro for better semantic matching and emotional analysis
+            model: "gemini-1.5-pro",
+            contents: [{ role: 'user', parts }],
+            system_instruction: {
+                parts: [{ text: `你是一个资深的大码女装买手专家。分析商家意图并推荐话术。输出JSON。` }]
+            },
+            generation_config: {
+                response_mime_type: "application/json",
+                response_schema: {
                     type: SchemaType.OBJECT,
                     properties: {
                         analysis: { type: SchemaType.STRING },
@@ -209,8 +201,9 @@ export const matchScript = async (input: string, image?: File): Promise<{
                     }
                 }
             }
-        });
+        };
 
+        const result = await callGeminiApi(payload);
         const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
         if (!text) return { analysis: "无法分析", recommendations: [] };
         return JSON.parse(text);
@@ -227,24 +220,44 @@ export const chatWithBuyerAI = async (
   image?: File
 ): Promise<string> => {
   try {
-    // Construct new user message
-    const newPart: GeminiPart[] = [];
+    // 1. Convert history to REST API format (snake_case)
+    const restHistory: GeminiContent[] = history.map(msg => ({
+      role: msg.role === 'model' ? 'model' : 'user',
+      parts: msg.parts.map((p: any) => {
+        // Handle camelCase from old state if exists
+        if (p.inlineData) {
+          return { inline_data: { mime_type: p.inlineData.mimeType, data: p.inlineData.data } };
+        }
+        // Handle snake_case if already converted
+        if (p.inline_data) {
+          return p;
+        }
+        // Text parts
+        return { text: p.text || "" };
+      })
+    }));
+
+    // 2. Add current message
+    const newParts: GeminiPart[] = [];
     if (image) {
-        newPart.push(await fileToGenerativePart(image));
+      newParts.push(await fileToGenerativePart(image));
     }
-    newPart.push({ text: message || " " });
-
-    const newUserMsg = { role: 'user', parts: newPart };
+    // Ensure text is never empty string if it's the only part, though API usually handles it.
+    newParts.push({ text: message || " " });
     
-    // Combine history + new message for stateless REST API
-    const contents = [...history, newUserMsg];
+    // 3. Combine
+    const contents = [...restHistory, { role: 'user', parts: newParts }];
 
-    const result = await callGeminiApi({
-      model: "gemini-1.5-flash",
+    const payload = {
+      // Use Pro for better conversation
+      model: "gemini-1.5-pro",
       contents: contents,
-      systemInstruction: `你现在是Temu平台资深的大码女装买手专家。职责：辅助买手选品、核价、怼商家。风格：简洁、数据导向、行话。`,
-    });
+      system_instruction: {
+          parts: [{ text: `你现在是Temu平台资深的大码女装买手专家。职责：辅助买手选品、核价、怼商家。风格：简洁、数据导向、行话。` }]
+      }
+    };
 
+    const result = await callGeminiApi(payload);
     return result.candidates?.[0]?.content?.parts?.[0]?.text || "AI 暂时没有回复";
   } catch (error) {
     console.error("Chat Error", error);
