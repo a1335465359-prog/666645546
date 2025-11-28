@@ -1,6 +1,9 @@
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 
+// Explicitly declare process to avoid "Cannot find name 'process'" error
+declare const process: any;
+
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
   // 加载当前环境的环境变量（支持 .env 文件和系统环境变量）
