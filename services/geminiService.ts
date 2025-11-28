@@ -1,7 +1,7 @@
 import { AITaskResponse } from "../types";
 import { SALES_SCRIPTS, ScriptItem } from "../data/scriptLibrary";
 
-// --- REST API Types (Strict Snake Case) ---
+// --- REST API Types (Strict Snake Case for Google JSON API) ---
 interface GeminiPart {
   text?: string;
   inline_data?: {
@@ -30,6 +30,7 @@ export const fileToGenerativePart = async (file: File): Promise<GeminiPart> => {
     const reader = new FileReader();
     reader.onloadend = () => {
       const base64String = reader.result as string;
+      // Remove data url prefix (e.g. "data:image/jpeg;base64,")
       const base64Data = base64String.split(',')[1];
       resolve({
         inline_data: {
@@ -57,7 +58,6 @@ const callGeminiApi = async (payload: any) => {
     const data = await response.json();
 
     if (!response.ok) {
-      // Extract Google API error message if available
       const apiMsg = data.error?.message || JSON.stringify(data.error);
       throw new Error(apiMsg || 'Gemini API Request Failed');
     }
@@ -88,8 +88,8 @@ export const analyzeImageAndText = async (text: string, imageFile?: File): Promi
     const systemPrompt = `你是一位大码女装买手的助理。请从输入（文本/截图）中提取待办任务。直接输出 JSON。`;
 
     const payload = {
-      // Use Flash for tasks as it's faster and sufficient for extraction
-      model: "gemini-1.5-flash",
+      // Use Pro model for high intelligence on complex image recognition tasks
+      model: "gemini-1.5-pro",
       contents: [{ role: 'user', parts }],
       system_instruction: {
         parts: [{ text: systemPrompt }]
@@ -139,7 +139,7 @@ export const editImage = async (originalImage: File, prompt: string): Promise<st
     
     console.log("Image edit requested via Proxy:", prompt);
     
-    // Using 1.5 Pro for better reasoning on visual tasks
+    // Using 1.5 Pro for visual reasoning
     await callGeminiApi({
       model: 'gemini-1.5-pro',
       contents: [{
@@ -151,9 +151,8 @@ export const editImage = async (originalImage: File, prompt: string): Promise<st
       }]
     });
 
-    // Note: The standard Gemini API does not yet support returning edited image bytes directly in this format.
-    // We mock the return to prevent app crash, returning original.
-    // In a full implementation, you would use the Imagen endpoint.
+    // Mock return: The standard REST API does not return image bytes for text-to-image editing in this endpoint.
+    // We return the original to keep app flow working. 
     return `data:${imagePart.inline_data!.mime_type};base64,${imagePart.inline_data!.data}`;
     
   } catch (error) {
@@ -171,11 +170,9 @@ export const matchScript = async (input: string, image?: File): Promise<{
         if (image) {
             parts.push(await fileToGenerativePart(image));
         }
-        // Using strict instructions
         parts.push({ text: `商家说: "${input}"。请分析商家的潜台词、情绪和核心抗拒点，并从下面的话术库中选择最合适的3条回复。\n\n话术库数据:\n${JSON.stringify(SALES_SCRIPTS)}` });
 
         const payload = {
-            // Use Pro for better semantic matching and emotional analysis
             model: "gemini-1.5-pro",
             contents: [{ role: 'user', parts }],
             system_instruction: {
@@ -242,14 +239,14 @@ export const chatWithBuyerAI = async (
     if (image) {
       newParts.push(await fileToGenerativePart(image));
     }
-    // Ensure text is never empty string if it's the only part, though API usually handles it.
+    // Ensure text is never empty string if it's the only part
     newParts.push({ text: message || " " });
     
     // 3. Combine
     const contents = [...restHistory, { role: 'user', parts: newParts }];
 
     const payload = {
-      // Use Pro for better conversation
+      // Use Pro model for best chat experience
       model: "gemini-1.5-pro",
       contents: contents,
       system_instruction: {
