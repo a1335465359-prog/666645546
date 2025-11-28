@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { MessageSquareText, Image as ImageIcon, Copy, Check, Sparkles, Loader2, X, Send } from 'lucide-react';
+import { MessageSquare, Image as ImageIcon, Copy, Check, Sparkles, Loader2, X, Send } from 'lucide-react';
 import { matchScript } from '../services/geminiService';
 import { ScriptItem } from '../data/scriptLibrary';
 
@@ -69,7 +69,7 @@ const ScriptMatcher: React.FC = () => {
       <div className="w-full md:w-[45%] flex flex-col border-r border-white/30 bg-white/30 backdrop-blur-md">
         <div className="p-6 pb-4 border-b border-white/20">
            <h2 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
-             <MessageSquareText size={20} className="text-slate-700" />
+             <MessageSquare size={20} className="text-slate-700" />
              商家对话分析
            </h2>
            <p className="text-xs text-slate-500 mt-1">粘贴聊天记录或截图，AI 帮你生成高情商回复。</p>

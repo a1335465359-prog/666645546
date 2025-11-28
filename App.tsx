@@ -14,7 +14,7 @@ import {
   Quote,
   Palette,
   ShoppingBag,
-  MessageSquareText,
+  MessageSquare,
   ExternalLink,
   Bot
 } from 'lucide-react';
@@ -268,7 +268,7 @@ const App: React.FC = () => {
                   onClick={() => setCurrentView('image-editor')} 
                 />
                <SidebarItem 
-                  icon={<MessageSquareText size={18} />} 
+                  icon={<MessageSquare size={18} />} 
                   label="话术推荐" 
                   active={currentView === 'script-matcher'} 
                   onClick={() => setCurrentView('script-matcher')} 

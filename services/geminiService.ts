@@ -2,6 +2,8 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { AITaskResponse } from "../types";
 import { SALES_SCRIPTS, ScriptItem } from "../data/scriptLibrary";
 
+declare const process: any;
+
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 // Helper to convert file to base64
@@ -120,8 +122,10 @@ export const editImage = async (originalImage: File, prompt: string): Promise<st
     });
 
     // Iterate through parts to find the image part (inlineData)
-    if (response.candidates && response.candidates.length > 0) {
-      for (const part of response.candidates[0].content.parts) {
+    // Add optional chaining to prevent crash if parts are missing
+    const parts = response.candidates?.[0]?.content?.parts;
+    if (parts) {
+      for (const part of parts) {
         if (part.inlineData) {
            return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
         }
