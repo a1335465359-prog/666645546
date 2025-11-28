@@ -249,8 +249,10 @@ export const chatWithBuyerAI = async (
       // Use Pro model for best chat experience
       model: "gemini-1.5-pro",
       contents: contents,
+      // Enable Internet Access / Google Search Grounding
+      tools: [{ google_search: {} }],
       system_instruction: {
-          parts: [{ text: `你现在是Temu平台资深的大码女装买手专家。职责：辅助买手选品、核价、怼商家。风格：简洁、数据导向、行话。` }]
+          parts: [{ text: `你现在是Temu平台资深的大码女装买手专家。职责：辅助买手选品、核价、怼商家。风格：简洁、数据导向、行话。如果需要查询最新市场信息，请使用搜索功能。` }]
       }
     };
 
