@@ -4,7 +4,10 @@ import { SALES_SCRIPTS, ScriptItem } from "../data/scriptLibrary";
 
 declare const process: any;
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Use a fallback empty string to prevent "White Screen" crash on load if API_KEY is missing.
+// The actual API calls will fail gracefully later if the key is invalid.
+const apiKey = process.env.API_KEY || "";
+const ai = new GoogleGenAI({ apiKey });
 
 // Helper to convert file to base64
 export const fileToGenerativePart = async (file: File): Promise<{ inlineData: { data: string; mimeType: string } }> => {
