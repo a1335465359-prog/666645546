@@ -1,36 +1,69 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Backend API Proxy
 
-# Buyermate - 大码女装买手助理
-
-专为大码女装买手打造的智能工作台。支持截图识别待办、自动生成跟进任务、定向款排期、话术推荐、AI 改图与智能助理。
-
-View your app in AI Studio: https://ai.studio/apps/drive/1BYBUNtQQ_hoo1EZ7CXYE5v2AQNsm6QmT
+A robust, failover-capable API proxy for AI Model interaction (Gemini/OpenAI), deployed on Vercel Serverless.
 
 ## Features
 
-- **智能待办**: 截图识别任务，自动提取 ShopID 和优先级。
-- **Temu 助理**: 专懂大码女装的 AI 助手，支持图片分析、多轮对话与**本地历史记录**。
-- **智能改图**: AI 辅助修图，快速生成卖点图，支持**拖拽上传与历史回溯**。
-- **话术推荐**: 针对商家抗拒点的专业话术库与 AI 实时分析。
+- **Multi-Key Load Balancing**: Round-robin selection of `GEMINI_API_KEY1`...`5`.
+- **Automatic Failover**: Retries on 5xx errors or network timeouts.
+- **Rate Limit Handling**: Detects 429 errors, puts the specific key on cooldown (default 60s), and instantly retries with a fresh key.
+- **Standardized Interface**: Front-end calls `/api/generate`, backend handles upstream complexity.
 
-## Run Locally
+## Environment Variables (Vercel)
 
-**Prerequisites:**  Node.js
+Configure these in your Vercel Project Settings:
 
-1. Install dependencies:
-   `npm install`
-2. Set the `API_KEY` in your environment variables to your Google Gemini API key.
-3. Run the app:
-   `npm run dev`
+| Variable | Description | Default |
+| :--- | :--- | :--- |
+| `GEMINI_API_KEY1`..`5` | Your API Keys. At least one is required. | - |
+| `MODEL_API_URL` | Upstream API Endpoint. For Gemini keys via OpenAI format, use `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`. | `https://api.openai.com/v1/chat/completions` |
+| `ADMIN_TOKEN` | Token for accessing `/api/debug-keys`. | - |
+| `REQUEST_TIMEOUT_MS` | Max duration for upstream request. | `10000` |
+| `KEY_COOLDOWN_MS` | Time to pause a key after 429 or repeated failure. | `60000` |
+| `MAX_RETRIES` | Max retry attempts per request. | `2` |
 
-## Deploy to Vercel
+## API Usage
 
-1. **Import Project**: Import this repository to Vercel.
-2. **Environment Variables**: In the Vercel project settings, add a new environment variable:
-   - Name: `API_KEY`
-   - Value: Your Google Gemini API Key (Must be a paid tier key for video/image generation features if used).
-3. **Deploy**: Click Deploy.
+### POST /api/generate
 
-**Troubleshooting**: If you see `ETARGET` or version errors for `@google/genai`, verify that `package.json` is using `"@google/genai": "latest"` and try redeploying with "Redeploy with Cache Cleared".
+**Request:**
+```json
+{
+  "prompt": "Hello world",
+  "system": "You are a helpful assistant", 
+  "model": "gemini-1.5-pro",
+  "temperature": 0.7
+}
+```
+
+**Response (Success):**
+```json
+{
+  "ok": true,
+  "data": { ...OpenAI Style Response... }
+}
+```
+
+**Response (Error):**
+```json
+{
+  "ok": false,
+  "error": "all_retries_failed",
+  "lastError": "timeout"
+}
+```
+
+## Testing
+
+Use the included `tests/e2e.sh` script or curl:
+
+```bash
+# Test Success
+curl -X POST http://localhost:3000/api/generate \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"Hi", "model":"gemini-1.5-pro"}'
+```
+
+## Known Limitations
+
+- **Statelessness**: Vercel Serverless functions (lambdas) may spin down. The in-memory key state (failures/cooldowns) persists only while the container is warm. For strict persistent state, use Vercel KV (Redis).
