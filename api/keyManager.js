@@ -1,22 +1,37 @@
 // Key Management Module
 // Handles storage, rotation (round-robin), cooldowns, and failure tracking for API keys.
-// Note: In Vercel Serverless (non-Edge), global variables persist across "warm" invocations,
-// allowing for effective short-term caching of key states.
+// Supports GEMINI_API_KEY (single) and GEMINI_API_KEY1~10 (multiple).
 
-const KEY_PREFIX = 'GEMINI_API_KEY';
-const KEYS = [
+// 1. Load Keys from Environment
+const RAW_KEYS = [
+  process.env.GEMINI_API_KEY,
   process.env.GEMINI_API_KEY1,
   process.env.GEMINI_API_KEY2,
   process.env.GEMINI_API_KEY3,
   process.env.GEMINI_API_KEY4,
   process.env.GEMINI_API_KEY5,
-].filter(Boolean);
+  process.env.GEMINI_API_KEY6,
+  process.env.GEMINI_API_KEY7,
+  process.env.GEMINI_API_KEY8,
+  process.env.GEMINI_API_KEY9,
+  process.env.GEMINI_API_KEY10,
+];
 
-// Configuration
-const KEY_COOLDOWN_MS = parseInt(process.env.KEY_COOLDOWN_MS || '60000', 10);
-const MAX_FAILURES_BEFORE_COOLDOWN = 2;
+// Deduplicate and filter empty keys
+const KEYS = Array.from(new Set(RAW_KEYS.filter(k => k && k.trim().length > 0)));
 
-// State (In-memory)
+if (KEYS.length === 0) {
+  console.error('[Gemini KeyManager] No API keys found. Please set GEMINI_API_KEY or GEMINI_API_KEY1~10 in Vercel Environment Variables.');
+} else {
+  console.log(`[Gemini KeyManager] Loaded ${KEYS.length} API keys.`);
+}
+
+// 2. Configuration
+const MAX_FAILURES_BEFORE_COOLDOWN = 3;     // Fail 3 times...
+const COOLDOWN_DURATION_MS = 10 * 60 * 1000; // ...cool down for 10 minutes
+
+// 3. State (In-memory)
+// Vercel Serverless functions reuse the same instance for "warm" requests, preserving this state.
 let rrIndex = 0;
 const keyStates = new Map();
 
@@ -25,22 +40,22 @@ KEYS.forEach(key => {
   keyStates.set(key, {
     failures: 0,
     cooldownUntil: 0,
-    lastUsedAt: 0,
-    totalUses: 0
+    totalUses: 0,
+    successes: 0
   });
 });
 
 /**
- * Mask key for logging (show last 4 chars)
+ * Helper: Mask key for logging (show last 4 chars)
  */
 function maskKey(key) {
-  if (!key || key.length < 4) return '****';
+  if (!key || key.length < 5) return '****';
   return '...' + key.slice(-4);
 }
 
 /**
- * Select a key using Round-Robin strategy, skipping cooled-down keys.
- * If all keys are cooling, pick the one with fewest failures or earliest cooldown expiry.
+ * pickKey: Returns a usable API key using Round-Robin.
+ * Skips keys that are currently in cooldown.
  */
 export function pickKey() {
   if (KEYS.length === 0) return null;
@@ -48,21 +63,26 @@ export function pickKey() {
   const now = Date.now();
   let selectedKey = null;
 
-  // 1. Try Round-Robin to find a healthy key
+  // Try Round-Robin to find a healthy key
+  // We loop at most KEYS.length times to check everyone once
   for (let i = 0; i < KEYS.length; i++) {
     const ptr = (rrIndex + i) % KEYS.length;
     const key = KEYS[ptr];
     const stats = keyStates.get(key);
 
-    if (stats.cooldownUntil <= now) {
-      selectedKey = key;
-      rrIndex = (ptr + 1) % KEYS.length; // Advance pointer
-      break;
+    // Check if cooled down
+    if (stats.cooldownUntil > now) {
+      continue; // Skip this key
     }
+
+    // Found a usable key
+    selectedKey = key;
+    rrIndex = (ptr + 1) % KEYS.length; // Move pointer for next time
+    break;
   }
 
-  // 2. If all keys are in cooldown, find the best "bad" option
-  // (e.g., the one expiring soonest) to avoid complete service stoppage
+  // If all keys are cooling, we MUST return something or the service dies.
+  // Strategy: Pick the one that expires soonest.
   if (!selectedKey) {
     let bestKey = KEYS[0];
     let minCooldown = Infinity;
@@ -75,13 +95,12 @@ export function pickKey() {
       }
     });
     selectedKey = bestKey;
-    // Do not advance rrIndex strictly here to keep rotation logic clean when they recover
+    console.warn('[Gemini KeyManager] All keys are cooling. Forced picking soonest available:', maskKey(selectedKey));
   }
 
-  // Update usage stat
+  // Update usage stat (just for tracking attempts)
   if (selectedKey) {
     const stats = keyStates.get(selectedKey);
-    stats.lastUsedAt = now;
     stats.totalUses++;
   }
 
@@ -89,56 +108,49 @@ export function pickKey() {
 }
 
 /**
- * Report a successful API call. Resets failure count.
+ * reportSuccess: Call this when upstream returns 200 OK.
+ * Resets failure count and cooldown.
  */
 export function reportSuccess(key) {
   if (!key || !keyStates.has(key)) return;
   const stats = keyStates.get(key);
   stats.failures = 0;
   stats.cooldownUntil = 0;
+  stats.successes++;
 }
 
 /**
- * Report a failed API call.
- * @param {string} key
- * @param {object} opts - { cooldownMs: number }
+ * reportFailure: Call this when upstream returns 4xx/5xx or network error.
+ * Increases failure count. If threshold reached, sets cooldown.
  */
-export function reportFailure(key, opts = {}) {
+export function reportFailure(key) {
   if (!key || !keyStates.has(key)) return;
   const stats = keyStates.get(key);
   const now = Date.now();
 
   stats.failures++;
 
-  // Force cooldown if specified (e.g., 429)
-  if (opts.cooldownMs) {
-    stats.cooldownUntil = now + opts.cooldownMs;
-    return;
-  }
-
-  // Auto cooldown threshold
+  // Trigger cooldown if threshold reached
   if (stats.failures >= MAX_FAILURES_BEFORE_COOLDOWN) {
-    stats.cooldownUntil = now + KEY_COOLDOWN_MS;
+    stats.cooldownUntil = now + COOLDOWN_DURATION_MS;
+    console.warn(`[Gemini KeyManager] Key ${maskKey(key)} entered cooldown for 10 mins (Failures: ${stats.failures})`);
   }
 }
 
 /**
- * Debug info for admin
+ * getDebug: Returns status of all keys for the debug endpoint.
  */
 export function getDebug() {
   return KEYS.map(key => {
     const stats = keyStates.get(key);
+    const timeLeft = Math.max(0, stats.cooldownUntil - Date.now());
     return {
       key: maskKey(key),
+      totalUses: stats.totalUses,
+      successes: stats.successes,
       failures: stats.failures,
-      cooldownUntil: stats.cooldownUntil,
-      isCooling: stats.cooldownUntil > Date.now(),
-      lastUsedAt: stats.lastUsedAt ? new Date(stats.lastUsedAt).toISOString() : null,
-      totalUses: stats.totalUses
+      isCooling: timeLeft > 0,
+      cooldownRemaining: timeLeft > 0 ? `${Math.ceil(timeLeft / 1000)}s` : '0s'
     };
   });
-}
-
-export function getKeyCount() {
-  return KEYS.length;
 }

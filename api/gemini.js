@@ -1,89 +1,66 @@
-export const config = {
-  runtime: 'edge', // 使用 Vercel Edge Runtime，速度更快，更稳定
-};
+import { pickKey, reportSuccess, reportFailure } from './keyManager.js';
 
-export default async function handler(req) {
-  // 1. 处理 CORS (允许前端访问)
+export default async function handler(req, res) {
+  // 1. CORS Headers
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
   if (req.method === 'OPTIONS') {
-    return new Response(null, {
-      status: 200,
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type',
-      },
-    });
+    return res.status(200).end();
   }
 
   if (req.method !== 'POST') {
-    return new Response(JSON.stringify({ error: 'Method Not Allowed' }), {
-      status: 405,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
   try {
-    // 2. 解析前端发来的数据
-    const body = await req.json();
-    
-    // 3. 获取 API Key (直接读取 Vercel 环境变量)
-    const apiKey = process.env.GEMINI_API_KEY;
-    const model = body.model || 'gemini-1.5-pro';
+    // 2. Parse Request
+    const body = req.json ? await req.json() : req.body;
+    let model = body.model || 'gemini-1.5-pro';
 
+    // 3. Get API Key
+    const apiKey = pickKey();
     if (!apiKey) {
-      console.error("Error: GEMINI_API_KEY is missing in environment variables.");
-      return new Response(JSON.stringify({ error: 'Server configuration error: API Key missing' }), {
-        status: 500,
-        headers: { 
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*' 
-        },
-      });
+      return res.status(503).json({ error: 'Service Busy (No API Keys Configured or Available)' });
     }
 
-    // 4. 拼接 Google API 地址
+    // 4. Construct URL
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
-    // 5. 转发请求给 Google
+    // 5. Forward Request
     const upstreamResponse = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        // Inject App Credentials for Networking/Gateway Auth
+        'AppID': 'ql70SMSyYo8XrjYh4N6AoHnf-MdYXbMMI',
+        'AppKey': '4rLsxocvIXzTbb2MEqW9ZDbS'
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(body)
     });
 
+    // 6. Handle Response
     const data = await upstreamResponse.json();
 
-    // 6. 检查 Google 的返回状态
     if (!upstreamResponse.ok) {
-      console.error("Google API Error:", data);
-      return new Response(JSON.stringify(data), {
-        status: upstreamResponse.status,
-        headers: { 
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*' 
-        },
+      console.error(`[Gemini Proxy] Error ${upstreamResponse.status}:`, data);
+      
+      // Report failure to KeyManager
+      reportFailure(apiKey);
+      
+      return res.status(upstreamResponse.status).json({
+        error: 'Gemini Upstream Error',
+        details: data
       });
     }
 
-    // 7. 成功返回
-    return new Response(JSON.stringify(data), {
-      status: 200,
-      headers: { 
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*' 
-      },
-    });
+    // Success
+    reportSuccess(apiKey);
+    return res.status(200).json(data);
 
   } catch (error) {
-    console.error("Proxy Error:", error);
-    return new Response(JSON.stringify({ error: error.message }), {
-      status: 500,
-      headers: { 
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*' 
-      },
-    });
+    console.error("[Gemini Proxy] Internal Error:", error);
+    return res.status(500).json({ error: error.message });
   }
 }
