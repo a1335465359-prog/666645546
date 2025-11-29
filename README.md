@@ -1,3 +1,5 @@
+updated
+<img width="805" height="664" alt="image" src="https://github.com/user-attachments/assets/5331445a-4b05-4e91-8c8d-7f2013958d0c" />
 # Backend API Proxy
 
 A robust, failover-capable API proxy for AI Model interaction (Gemini/OpenAI), deployed on Vercel Serverless.
