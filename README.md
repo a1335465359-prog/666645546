@@ -1,69 +1,20 @@
-# Backend API Proxy
+<div align="center">
+<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+</div>
 
-A robust, failover-capable API proxy for AI Model interaction (Gemini/OpenAI), deployed on Vercel Serverless.
+# Run and deploy your AI Studio app
 
-## Features
+This contains everything you need to run your app locally.
 
-- **Multi-Key Load Balancing**: Round-robin selection of `GEMINI_API_KEY1`...`5`.
-- **Automatic Failover**: Retries on 5xx errors or network timeouts.
-- **Rate Limit Handling**: Detects 429 errors, puts the specific key on cooldown (default 60s), and instantly retries with a fresh key.
-- **Standardized Interface**: Front-end calls `/api/generate`, backend handles upstream complexity.
+View your app in AI Studio: https://ai.studio/apps/drive/1hs9TXi6wSXKI90qKbAVJQykfMQmiic1b
 
-## Environment Variables (Vercel)
+## Run Locally
 
-Configure these in your Vercel Project Settings:
+**Prerequisites:**  Node.js
 
-| Variable | Description | Default |
-| :--- | :--- | :--- |
-| `GEMINI_API_KEY1`..`5` | Your API Keys. At least one is required. | - |
-| `MODEL_API_URL` | Upstream API Endpoint. For Gemini keys via OpenAI format, use `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`. | `https://api.openai.com/v1/chat/completions` |
-| `ADMIN_TOKEN` | Token for accessing `/api/debug-keys`. | - |
-| `REQUEST_TIMEOUT_MS` | Max duration for upstream request. | `10000` |
-| `KEY_COOLDOWN_MS` | Time to pause a key after 429 or repeated failure. | `60000` |
-| `MAX_RETRIES` | Max retry attempts per request. | `2` |
 
-## API Usage
-
-### POST /api/generate
-
-**Request:**
-```json
-{
-  "prompt": "Hello world",
-  "system": "You are a helpful assistant", 
-  "model": "gemini-1.5-pro",
-  "temperature": 0.7
-}
-```
-
-**Response (Success):**
-```json
-{
-  "ok": true,
-  "data": { ...OpenAI Style Response... }
-}
-```
-
-**Response (Error):**
-```json
-{
-  "ok": false,
-  "error": "all_retries_failed",
-  "lastError": "timeout"
-}
-```
-
-## Testing
-
-Use the included `tests/e2e.sh` script or curl:
-
-```bash
-# Test Success
-curl -X POST http://localhost:3000/api/generate \
-  -H "Content-Type: application/json" \
-  -d '{"prompt":"Hi", "model":"gemini-1.5-pro"}'
-```
-
-## Known Limitations
-
-- **Statelessness**: Vercel Serverless functions (lambdas) may spin down. The in-memory key state (failures/cooldowns) persists only while the container is warm. For strict persistent state, use Vercel KV (Redis).
+1. Install dependencies:
+   `npm install`
+2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+3. Run the app:
+   `npm run dev`

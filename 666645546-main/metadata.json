@@ -1,0 +1,8 @@
+{
+  "name": "大码买手每日助理",
+  "description": "专为大码女装买手打造的智能待办清单。支持截图识别、自动生成跟进任务、定向款排期与倒计时提醒。",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
