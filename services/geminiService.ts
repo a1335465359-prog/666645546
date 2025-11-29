@@ -310,33 +310,37 @@ export const analyzeImageAndText = async (
  * 2. 智能改图模块 (Image Editor)
  */
 export const editImage = async (
-  originalImage: File,
+  _originalImage: File,
   prompt: string
 ): Promise<string> => {
   try {
-    const imagePart = await fileToGenerativePart(originalImage);
+    console.log("Image edit requested via Doubao:", prompt);
 
-    console.log("Image edit requested via Proxy:", prompt);
-
-    await callGeminiApi({
-      model: "gemini-2.5-flash",
-      contents: [
-        {
-          role: "user",
-          parts: [
-            imagePart,
-            { text: `Describe detailed changes for: ${prompt}` },
-          ],
-        },
-      ],
+    const response = await fetch("/api/doubaoImage", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        prompt,
+      }),
     });
 
-    // Mock return: Return the original image base64 because simple gemini text models don't output image bytes.
-    return `data:${imagePart.inline_data!.mime_type};base64,${
-      imagePart.inline_data!.data
-    }`;
+    const data = await response.json();
+
+    if (!response.ok) {
+      const apiMsg = data.error || JSON.stringify(data);
+      throw new Error(apiMsg || "Doubao image API request failed");
+    }
+
+    if (!data.url) {
+      throw new Error("Doubao image API returned empty url");
+    }
+
+    // 返回豆包生成图片的 URL，给 ImageEditor 显示和下载
+    return data.url;
   } catch (error) {
-    console.error("Gemini Image Edit Error:", error);
+    console.error("Doubao Image Edit Error:", error);
     throw error;
   }
 };
