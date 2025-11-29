@@ -45,8 +45,11 @@ export const fileToGenerativePart = async (file: File): Promise<GeminiPart> => {
 };
 
 // --- CORE API CALLER ---
+// 统一调用后端代理 /api/gemini
 const callGeminiApi = async (payload: any) => {
   try {
+    console.log("[Gemini Service] Sending request to /api/gemini with model:", payload.model);
+    
     const response = await fetch('/api/gemini', {
       method: 'POST',
       headers: {
@@ -69,6 +72,9 @@ const callGeminiApi = async (payload: any) => {
   }
 };
 
+/**
+ * 1. 任务分析模块 (Task Input)
+ */
 export const analyzeImageAndText = async (text: string, imageFile?: File): Promise<AITaskResponse> => {
   try {
     const parts: GeminiPart[] = [];
@@ -88,8 +94,7 @@ export const analyzeImageAndText = async (text: string, imageFile?: File): Promi
     const systemPrompt = `你是一位大码女装买手的助理。请从输入（文本/截图）中提取待办任务。直接输出 JSON。`;
 
     const payload = {
-      // Use Pro model for high intelligence on complex image recognition tasks
-      model: "gemini-1.5-pro",
+      model: "gemini-2.5-flash", // Updated to 2.5-flash
       contents: [{ role: 'user', parts }],
       system_instruction: {
         parts: [{ text: systemPrompt }]
@@ -133,26 +138,32 @@ export const analyzeImageAndText = async (text: string, imageFile?: File): Promi
   }
 };
 
+/**
+ * 2. 智能改图模块 (Image Editor)
+ * 注意：Gemini 文本模型无法直接返回编辑后的图片字节流。
+ * 这里我们保持之前的逻辑：让 AI "看" 图并给出建议（或假装处理），
+ * 实际返回原图 base64 以保证流程不中断，若需真实改图需接入 Imagen 模型接口。
+ */
 export const editImage = async (originalImage: File, prompt: string): Promise<string> => {
   try {
     const imagePart = await fileToGenerativePart(originalImage);
     
     console.log("Image edit requested via Proxy:", prompt);
     
-    // Using 1.5 Pro for visual reasoning
+    // Using gemini-2.5-flash for visual reasoning
     await callGeminiApi({
-      model: 'gemini-1.5-pro',
+      model: "gemini-2.5-flash", // Updated to 2.5-flash
       contents: [{
         role: 'user',
         parts: [
             imagePart,
-            { text: `Describe how this image would look if: ${prompt}` }
+            { text: `Describe detailed changes for: ${prompt}` }
         ]
       }]
     });
 
-    // Mock return: The standard REST API does not return image bytes for text-to-image editing in this endpoint.
-    // We return the original to keep app flow working. 
+    // Mock return: Return the original image data URL so the UI shows something.
+    // (Standard Gemini 2.5 Flash does not return 'image/png' bytes in generateContent)
     return `data:${imagePart.inline_data!.mime_type};base64,${imagePart.inline_data!.data}`;
     
   } catch (error) {
@@ -161,6 +172,9 @@ export const editImage = async (originalImage: File, prompt: string): Promise<st
   }
 };
 
+/**
+ * 3. 话术推荐模块 (Script Matcher)
+ */
 export const matchScript = async (input: string, image?: File): Promise<{
     analysis: string;
     recommendations: ScriptItem[]
@@ -173,7 +187,7 @@ export const matchScript = async (input: string, image?: File): Promise<{
         parts.push({ text: `商家说: "${input}"。请分析商家的潜台词、情绪和核心抗拒点，并从下面的话术库中选择最合适的3条回复。\n\n话术库数据:\n${JSON.stringify(SALES_SCRIPTS)}` });
 
         const payload = {
-            model: "gemini-1.5-pro",
+            model: "gemini-2.5-flash", // Updated to 2.5-flash
             contents: [{ role: 'user', parts }],
             system_instruction: {
                 parts: [{ text: `你是一个资深的大码女装买手专家。分析商家意图并推荐话术。输出JSON。` }]
@@ -211,6 +225,9 @@ export const matchScript = async (input: string, image?: File): Promise<{
     }
 };
 
+/**
+ * 4. Temu 助理聊天模块 (Chat Assistant)
+ */
 export const chatWithBuyerAI = async (
   history: { role: string; parts: any[] }[],
   message: string,
@@ -246,10 +263,9 @@ export const chatWithBuyerAI = async (
     const contents = [...restHistory, { role: 'user', parts: newParts }];
 
     const payload = {
-      // Use Pro model for best chat experience
-      model: "gemini-1.5-pro",
+      model: "gemini-2.5-flash", // Updated to 2.5-flash
       contents: contents,
-      // Enable Internet Access / Google Search Grounding
+      // Enable Internet Access / Google Search Grounding if supported
       tools: [{ google_search: {} }],
       system_instruction: {
           parts: [{ text: `你现在是Temu平台资深的大码女装买手专家。职责：辅助买手选品、核价、怼商家。风格：简洁、数据导向、行话。如果需要查询最新市场信息，请使用搜索功能。` }]
@@ -257,7 +273,14 @@ export const chatWithBuyerAI = async (
     };
 
     const result = await callGeminiApi(payload);
-    return result.candidates?.[0]?.content?.parts?.[0]?.text || "AI 暂时没有回复";
+    
+    // Robust check for text content
+    const candidate = result.candidates?.[0];
+    if (candidate?.content?.parts?.[0]?.text) {
+        return candidate.content.parts[0].text;
+    }
+    
+    return "AI 暂时没有回复 (No text generated)";
   } catch (error) {
     console.error("Chat Error", error);
     return "AI 助理暂时开小差了，请稍后再试。";
