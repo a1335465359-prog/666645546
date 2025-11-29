@@ -15,142 +15,135 @@ const RAW_KEYS = [
   process.env.GEMINI_API_KEY8,
   process.env.GEMINI_API_KEY9,
   process.env.GEMINI_API_KEY10,
-];
+].filter(Boolean);
 
-// Deduplicate and filter empty keys
-const KEYS = Array.from(new Set(RAW_KEYS.filter(k => k && k.trim().length > 0)));
+// 去重，防止同一个 key 配了两次
+const KEYS = Array.from(new Set(RAW_KEYS));
 
-if (KEYS.length === 0) {
-  console.error('[Gemini KeyManager] No API keys found. Please set GEMINI_API_KEY or GEMINI_API_KEY1~10 in Vercel Environment Variables.');
-} else {
-  console.log(`[Gemini KeyManager] Loaded ${KEYS.length} API keys.`);
-}
+// Configuration
+const KEY_COOLDOWN_MS = parseInt(
+  process.env.KEY_COOLDOWN_MS || String(10 * 60 * 1000),
+  10
+); // 默认 10 分钟
+const MAX_FAILURES_BEFORE_COOLDOWN = parseInt(
+  process.env.MAX_FAILURES_BEFORE_COOLDOWN || "3",
+  10
+); // 默认连续 3 次失败冷却
 
-// 2. Configuration
-const MAX_FAILURES_BEFORE_COOLDOWN = 3;     // Fail 3 times...
-const COOLDOWN_DURATION_MS = 10 * 60 * 1000; // ...cool down for 10 minutes
-
-// 3. State (In-memory)
-// Vercel Serverless functions reuse the same instance for "warm" requests, preserving this state.
+// State (In-memory)
 let rrIndex = 0;
 const keyStates = new Map();
 
-// Initialize state
-KEYS.forEach(key => {
+if (KEYS.length === 0) {
+  console.error(
+    "[Gemini KeyManager] No API keys found. Please set GEMINI_API_KEY or GEMINI_API_KEY1~10"
+  );
+}
+
+// 初始化每个 key 的状态
+KEYS.forEach((key) => {
   keyStates.set(key, {
+    totalUses: 0,
+    successes: 0,
     failures: 0,
     cooldownUntil: 0,
-    totalUses: 0,
-    successes: 0
   });
 });
 
-/**
- * Helper: Mask key for logging (show last 4 chars)
- */
 function maskKey(key) {
-  if (!key || key.length < 5) return '****';
-  return '...' + key.slice(-4);
+  if (!key || key.length < 4) return "****";
+  return "..." + key.slice(-4);
 }
 
-/**
- * pickKey: Returns a usable API key using Round-Robin.
- * Skips keys that are currently in cooldown.
- */
+// 轮询选 key，跳过冷却中的 key
 export function pickKey() {
   if (KEYS.length === 0) return null;
-
   const now = Date.now();
+
   let selectedKey = null;
 
-  // Try Round-Robin to find a healthy key
-  // We loop at most KEYS.length times to check everyone once
+  // 1. Round-robin 找一个没在冷却的
   for (let i = 0; i < KEYS.length; i++) {
-    const ptr = (rrIndex + i) % KEYS.length;
-    const key = KEYS[ptr];
+    const idx = (rrIndex + i) % KEYS.length;
+    const key = KEYS[idx];
     const stats = keyStates.get(key);
+    if (!stats) continue;
 
-    // Check if cooled down
-    if (stats.cooldownUntil > now) {
-      continue; // Skip this key
+    if (stats.cooldownUntil <= now) {
+      selectedKey = key;
+      rrIndex = (idx + 1) % KEYS.length;
+      break;
     }
-
-    // Found a usable key
-    selectedKey = key;
-    rrIndex = (ptr + 1) % KEYS.length; // Move pointer for next time
-    break;
   }
 
-  // If all keys are cooling, we MUST return something or the service dies.
-  // Strategy: Pick the one that expires soonest.
+  // 2. 如果全在冷却，选一个冷却最早结束的兜底
   if (!selectedKey) {
-    let bestKey = KEYS[0];
+    let bestKey = null;
     let minCooldown = Infinity;
-
-    KEYS.forEach(key => {
+    KEYS.forEach((key) => {
       const stats = keyStates.get(key);
+      if (!stats) return;
       if (stats.cooldownUntil < minCooldown) {
         minCooldown = stats.cooldownUntil;
         bestKey = key;
       }
     });
     selectedKey = bestKey;
-    console.warn('[Gemini KeyManager] All keys are cooling. Forced picking soonest available:', maskKey(selectedKey));
   }
 
-  // Update usage stat (just for tracking attempts)
   if (selectedKey) {
     const stats = keyStates.get(selectedKey);
-    stats.totalUses++;
+    stats.totalUses += 1;
   }
 
   return selectedKey;
 }
 
-/**
- * reportSuccess: Call this when upstream returns 200 OK.
- * Resets failure count and cooldown.
- */
+// 成功：重置失败 & 冷却
 export function reportSuccess(key) {
   if (!key || !keyStates.has(key)) return;
   const stats = keyStates.get(key);
+  stats.successes += 1;
   stats.failures = 0;
   stats.cooldownUntil = 0;
-  stats.successes++;
 }
 
-/**
- * reportFailure: Call this when upstream returns 4xx/5xx or network error.
- * Increases failure count. If threshold reached, sets cooldown.
- */
-export function reportFailure(key) {
+// 失败：失败 +1，达到阈值后进入冷却
+export function reportFailure(key, opts = {}) {
   if (!key || !keyStates.has(key)) return;
   const stats = keyStates.get(key);
   const now = Date.now();
 
-  stats.failures++;
+  stats.failures += 1;
 
-  // Trigger cooldown if threshold reached
+  // 强制冷却（例如 429）
+  if (opts.cooldownMs) {
+    stats.cooldownUntil = now + opts.cooldownMs;
+    return;
+  }
+
   if (stats.failures >= MAX_FAILURES_BEFORE_COOLDOWN) {
-    stats.cooldownUntil = now + COOLDOWN_DURATION_MS;
-    console.warn(`[Gemini KeyManager] Key ${maskKey(key)} entered cooldown for 10 mins (Failures: ${stats.failures})`);
+    stats.cooldownUntil = now + KEY_COOLDOWN_MS;
   }
 }
 
-/**
- * getDebug: Returns status of all keys for the debug endpoint.
- */
+// Debug 用：查看每个 key 的状态
 export function getDebug() {
-  return KEYS.map(key => {
+  return KEYS.map((key) => {
     const stats = keyStates.get(key);
-    const timeLeft = Math.max(0, stats.cooldownUntil - Date.now());
+    const now = Date.now();
+    const remainingMs = Math.max(0, (stats.cooldownUntil || 0) - now);
     return {
       key: maskKey(key),
       totalUses: stats.totalUses,
       successes: stats.successes,
       failures: stats.failures,
-      isCooling: timeLeft > 0,
-      cooldownRemaining: timeLeft > 0 ? `${Math.ceil(timeLeft / 1000)}s` : '0s'
+      isCooling: remainingMs > 0,
+      cooldownRemainingMs: remainingMs,
     };
   });
+}
+
+export function getKeyCount() {
+  return KEYS.length;
 }
