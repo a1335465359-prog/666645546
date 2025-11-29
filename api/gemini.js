@@ -66,7 +66,7 @@ export default async function handler(req, res) {
           Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: 'doubao-seed-1.6-251015',
+          model: 'doubao-seed-1-6-251015',
           messages,
           temperature: 0.4,
           ...(generation_config?.response_mime_type === 'application/json'
