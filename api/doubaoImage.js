@@ -34,7 +34,7 @@ export default async function handler(req, res) {
           Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: 'doubao-seeddream-4.0-250828',
+          model: 'doubao-seedream-4-0-250828',
           prompt,
           size: size || '2k',
           n: 1,
