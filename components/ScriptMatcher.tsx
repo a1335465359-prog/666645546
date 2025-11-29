@@ -213,34 +213,37 @@ const ScriptMatcher: React.FC = () => {
                     key={index}
                     className="group rounded-xl border border-slate-100 bg-slate-50/70 hover:bg-slate-100/80 transition-colors p-3"
                   >
-                    <div className="flex items-center justify-between mb-2 gap-2">
-                      <div className="flex flex-col">
-                        <span className="text-xs font-semibold text-slate-500">
-                          {script.category || "推荐话术"}
-                        </span>
-                        {script.title && (
-                          <span className="text-sm font-medium text-slate-800 mt-0.5">
-                            {script.title}
-                          </span>
-                        )}
-                      </div>
-                      <button
-                        onClick={() => handleCopy(script.content, index)}
-                        className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-white hover:bg-slate-100 border border-slate-200 text-[11px] text-slate-600"
-                      >
-                        {copiedIndex === index ? (
-                          <>
-                            <Check size={12} />
-                            已复制
-                          </>
-                        ) : (
-                          <>
-                            <Copy size={12} />
-                            复制
-                          </>
-                        )}
-                      </button>
-                    </div>
+             <div className="flex items-center justify-between mb-2 gap-2">
+  <div className="flex flex-col">
+    <span className="text-xs font-semibold text-slate-500">
+      {script.category || "推荐话术"}
+    </span>
+
+    {script.scenario && (
+      <span className="text-sm font-medium text-slate-800 mt-0.5">
+        {script.scenario}
+      </span>
+    )}
+  </div>
+
+  <button
+    onClick={() => handleCopy(script.content, index)}
+    className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-white hover:bg-slate-100 border border-slate-200 text-[11px] text-slate-600"
+  >
+    {copiedIndex === index ? (
+      <>
+        <Check size={12} />
+        已复制
+      </>
+    ) : (
+      <>
+        <Copy size={12} />
+        复制
+      </>
+    )}
+  </button>
+</div>
+
                     <p className="text-[14px] leading-relaxed text-slate-800 whitespace-pre-wrap">
                       {script.content}
                     </p>
