@@ -1,7 +1,7 @@
-import { pickKey, reportSuccess, reportFailure } from './keyManager.js';
+import { reportSuccess, reportFailure } from './keyManager.js';
 
 export default async function handler(req, res) {
-  // 1. CORS Headers
+  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -15,52 +15,100 @@ export default async function handler(req, res) {
   }
 
   try {
-    // 2. Parse Request
-    const body = req.json ? await req.json() : req.body;
-    let model = body.model || 'gemini-1.5-pro';
-
-    // 3. Get API Key
-    const apiKey = pickKey();
+    const apiKey = process.env.GEMINI_API_KEY1;
     if (!apiKey) {
-      return res.status(503).json({ error: 'Service Busy (No API Keys Configured or Available)' });
+      return res
+        .status(500)
+        .json({ error: 'Missing GEMINI_API_KEY1 (Doubao API key)' });
     }
 
-    // 4. Construct URL
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    // 前端传的是 Google Gemini 的格式：{ model, contents, system_instruction, generation_config }
+    const body = req.body || {};
+    const { contents = [], system_instruction, generation_config } = body;
 
-    // 5. Forward Request
-    const upstreamResponse = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        // Inject App Credentials for Networking/Gateway Auth
-        'AppID': 'ql70SMSyYo8XrjYh4N6AoHnf-MdYXbMMI',
-        'AppKey': '4rLsxocvIXzTbb2MEqW9ZDbS'
-      },
-      body: JSON.stringify(body)
-    });
+    // 组装成 Doubao(OpenAI 风格) 的 messages
+    const messages = [];
 
-    // 6. Handle Response
-    const data = await upstreamResponse.json();
+    // system 提示词
+    if (system_instruction?.parts?.length) {
+      const sysText = system_instruction.parts
+        .map((p) => p.text || '')
+        .filter(Boolean)
+        .join('\n');
+      if (sysText) {
+        messages.push({ role: 'system', content: sysText });
+      }
+    }
 
-    if (!upstreamResponse.ok) {
-      console.error(`[Gemini Proxy] Error ${upstreamResponse.status}:`, data);
-      
-      // Report failure to KeyManager
+    // 对话内容
+    for (const c of contents) {
+      const role = c.role === 'model' ? 'assistant' : c.role || 'user';
+      const text = (c.parts || [])
+        .map((p) => p.text || '')
+        .filter(Boolean)
+        .join('\n');
+      if (text) {
+        messages.push({ role, content: text });
+      }
+    }
+
+    if (messages.length === 0) {
+      return res.status(400).json({ error: 'Empty messages' });
+    }
+
+    // 调用豆包文本模型 Doubao-Seed-1.6
+    const upstreamRes = await fetch(
+      'https://ark.cn-beijing.volces.com/api/v3/chat/completions',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: 'doubao-seed-1.6-251015',
+          messages,
+          temperature: 0.4,
+          ...(generation_config?.response_mime_type === 'application/json'
+            ? { response_format: { type: 'json_object' } }
+            : {}),
+        }),
+      }
+    );
+
+    const data = await upstreamRes.json();
+
+    if (!upstreamRes.ok) {
+      console.error('[Doubao text upstream error]', upstreamRes.status, data);
       reportFailure(apiKey);
-      
-      return res.status(upstreamResponse.status).json({
-        error: 'Gemini Upstream Error',
-        details: data
+      return res.status(upstreamRes.status).json({
+        error: 'Doubao upstream error',
+        details: data,
       });
     }
 
-    // Success
-    reportSuccess(apiKey);
-    return res.status(200).json(data);
+    // Doubao 返回 OpenAI 风格：
+    // { choices: [{ message: { content: '...' } }] }
+    const text =
+      data.choices?.[0]?.message?.content ??
+      data.choices?.[0]?.delta?.content ??
+      '';
 
-  } catch (error) {
-    console.error("[Gemini Proxy] Internal Error:", error);
-    return res.status(500).json({ error: error.message });
+    // 包装成“伪 Gemini 格式”，让前端 geminiService.ts 不用改：
+    const wrapped = {
+      candidates: [
+        {
+          content: {
+            parts: [{ text }],
+          },
+        },
+      ],
+    };
+
+    reportSuccess(apiKey);
+    return res.status(200).json(wrapped);
+  } catch (err) {
+    console.error('[Doubao text proxy internal error]', err);
+    return res.status(500).json({ error: err.message || 'Internal error' });
   }
 }
