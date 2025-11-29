@@ -1,66 +1,80 @@
-import { pickKey, reportSuccess, reportFailure } from './keyManager.js';
+import { pickKey, reportSuccess, reportFailure } from "./keyManager.js";
 
 export default async function handler(req, res) {
-  // 1. CORS Headers
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  // CORS
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  if (req.method === 'OPTIONS') {
+  if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
 
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method Not Allowed' });
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method Not Allowed" });
   }
 
   try {
-    // 2. Parse Request
-    const body = req.json ? await req.json() : req.body;
-    let model = body.model || 'gemini-1.5-pro';
+    const body = req.body || (req.json ? await req.json() : {});
 
-    // 3. Get API Key
+    const model = body?.model || "gemini-1.5-flash";
+
     const apiKey = pickKey();
     if (!apiKey) {
-      return res.status(503).json({ error: 'Service Busy (No API Keys Configured or Available)' });
+      return res
+        .status(503)
+        .json({ error: "Service Busy (No API Keys Available)" });
     }
 
-    // 4. Construct URL
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
-    // 5. Forward Request
     const upstreamResponse = await fetch(url, {
-      method: 'POST',
+      method: "POST",
       headers: {
-        'Content-Type': 'application/json',
-        // Inject App Credentials for Networking/Gateway Auth
-        'AppID': 'ql70SMSyYo8XrjYh4N6AoHnf-MdYXbMMI',
-        'AppKey': '4rLsxocvIXzTbb2MEqW9ZDbS'
+        "Content-Type": "application/json",
+        // 你原来联网用的这两个头我帮你保留
+        AppID: "ql70SMSyYo8XrjYh4N6AoHnf-MdYXbMMI",
+        AppKey: "4rLsxocvIXzTbb2MEqW9ZDbS",
       },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
     });
 
-    // 6. Handle Response
-    const data = await upstreamResponse.json();
+    const text = await upstreamResponse.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { raw: text };
+    }
 
     if (!upstreamResponse.ok) {
-      console.error(`[Gemini Proxy] Error ${upstreamResponse.status}:`, data);
-      
-      // Report failure to KeyManager
-      reportFailure(apiKey);
-      
-      return res.status(upstreamResponse.status).json({
-        error: 'Gemini Upstream Error',
-        details: data
+      const status = upstreamResponse.status;
+
+      // 429：强制冷却
+      if (status === 429) {
+        reportFailure(apiKey, { cooldownMs: 10 * 60 * 1000 });
+      } else {
+        reportFailure(apiKey);
+      }
+
+      console.error(
+        "[Gemini Proxy] Upstream Error:",
+        status,
+        JSON.stringify(data).slice(0, 500)
+      );
+
+      return res.status(status).json({
+        error: "Gemini Upstream Error",
+        status,
+        details: data,
       });
     }
 
-    // Success
+    // 成功：重置这个 key 的失败 & 冷却
     reportSuccess(apiKey);
     return res.status(200).json(data);
-
   } catch (error) {
     console.error("[Gemini Proxy] Internal Error:", error);
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: error?.message || "Server Error" });
   }
 }
